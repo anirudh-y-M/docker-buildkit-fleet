@@ -1,0 +1,116 @@
+name: Strip cache mounts on release builds
+author: Anirudh Yadav
+description: |-
+  Resolve which Dockerfile a build should use. On release builds it writes a
+  copy with every `RUN --mount=type=cache` removed, so the released image never
+  consumes a shared, mutable build cache that any pull request on the same
+  BuildKit worker could have written into. On non-release builds it passes the
+  original Dockerfile through. type=secret and type=bind mounts are preserved.
+
+  By default (`strip: auto`) the action decides for itself whether this is a
+  release build — a tag, or the production branch on a non-PR event — and
+  exposes the decision as `is_release`, so callers share one definition of
+  "release" instead of hand-rolling the predicate.
+
+branding:
+  icon: shield
+  color: orange
+
+inputs:
+  dockerfile:
+    description: Path to the Dockerfile, relative to the repository root (same resolution as docker/build-push-action `file:`).
+    required: true
+  strip:
+    description: |
+      `auto` (default) strips on release builds and keeps mounts otherwise.
+      `true` / `false` force the decision. Any other value is an error.
+    required: false
+    default: "auto"
+  production-branch:
+    description: |
+      Production branch name for the `auto` predicate. Resolution order: this
+      input, then `production-branch-config`, then the event payload's default
+      branch. Set it when your release branch is not the default branch.
+    required: false
+    default: ""
+  production-branch-config:
+    description: |
+      Optional path to a JSON file mapping repositories to production branches:
+      { "owner/repo": { "production_branch": "release" } }. Useful on
+      self-hosted runners that ship a platform-wide config.
+    required: false
+    default: ""
+
+outputs:
+  file:
+    description: |
+      The Dockerfile path the build should use: the original on non-release
+      builds, or the absolute path of the stripped copy under RUNNER_TEMP on
+      release builds. Pass it to `docker build -f` / build-push-action `file:`;
+      otherwise the strip is a silent no-op.
+    value: ${{ steps.resolve.outputs.file }}
+  is_release:
+    description: Whether this build was classified as a release build (`true`/`false`), regardless of any `strip` override.
+    value: ${{ steps.resolve.outputs.is_release }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        STRIP: ${{ inputs.strip }}
+        PRODUCTION_BRANCH: ${{ inputs.production-branch }}
+        PRODUCTION_BRANCH_CONFIG: ${{ inputs.production-branch-config }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -r "${GITHUB_WORKSPACE}/${DOCKERFILE}" ] && [ ! -r "${DOCKERFILE}" ]; then
+          echo "::error::strip-cache-mounts: cannot read '${DOCKERFILE}'. Paths resolve against the repository root."
+          exit 1
+        fi
+        [ -r "${DOCKERFILE}" ] || cd "${GITHUB_WORKSPACE}"
+
+        IFS=$'\t' read -r is_release PROD_BRANCH PROD_SRC < <(
+          "${GITHUB_ACTION_PATH}/is-release.sh" "${PRODUCTION_BRANCH}" "${DEFAULT_BRANCH}" "${PRODUCTION_BRANCH_CONFIG}"
+        )
+        echo "is_release=${is_release}" >> "$GITHUB_OUTPUT"
+        echo "release predicate: event=${GITHUB_EVENT_NAME} ref_type=${GITHUB_REF_TYPE} ref=${GITHUB_REF_NAME} production_branch=${PROD_BRANCH:-<unresolved>} (${PROD_SRC}) -> is_release=${is_release}"
+
+        if [ "${PROD_SRC}" = "unresolved" ] && [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+          echo "::warning::strip-cache-mounts: could not determine the production branch, so this is treated as a NON-release build. Pass production-branch explicitly if that is wrong."
+        fi
+
+        case "${STRIP}" in
+          auto|"") strip="${is_release}" ;;
+          true|false)
+            strip="${STRIP}"
+            [ "${strip}" = "${is_release}" ] || echo "strip=${STRIP} overrides the computed is_release=${is_release}"
+            ;;
+          *) echo "::error::strip-cache-mounts: invalid strip='${STRIP}' (expected auto, true or false)"; exit 1 ;;
+        esac
+
+        if [ "${strip}" != "true" ]; then
+          echo "Keeping cache mounts (${DOCKERFILE})"
+          echo "file=${DOCKERFILE}" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if "${GITHUB_ACTION_PATH}/has-final-stage-cache-mount.sh" "${DOCKERFILE}"; then
+          echo "::warning file=${DOCKERFILE}::This Dockerfile uses RUN --mount=type=cache in its FINAL stage. Release builds strip cache mounts, so everything that RUN writes into the mount target (e.g. /root/.cache/pip) is baked into the released image. Move dependency installs into a builder stage, or clean the cache directory in the same RUN."
+        fi
+
+        # Named after the source path so a job stripping two Dockerfiles cannot
+        # have the second overwrite the first. Written outside the build context.
+        OUT="${RUNNER_TEMP}/stripped-$(printf '%s' "${DOCKERFILE}" | tr -c 'A-Za-z0-9._-' '_')"
+        "${GITHUB_ACTION_PATH}/strip-cache-mounts.sh" "${DOCKERFILE}" "${OUT}"
+
+        removed=$(grep -cE -- '--mount=[^[:space:]]*type=cache' "${DOCKERFILE}" || true)
+        if [ "${removed}" -eq 0 ]; then
+          echo "Release build: no cache mounts to strip (${DOCKERFILE}); using the copy at ${OUT}"
+        else
+          echo "Release build: stripped cache mounts from ${removed} line(s) -> ${OUT}"
+        fi
+        echo "file=${OUT}" >> "$GITHUB_OUTPUT"

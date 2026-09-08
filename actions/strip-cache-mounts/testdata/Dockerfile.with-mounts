@@ -1,0 +1,12 @@
+# apt/pip cache mounts stay in comments: --mount=type=cache is only stripped
+# from real instructions, never from comment text.
+FROM golang:1.24 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
+    go build -o /app ./cmd/server
+RUN --mount=target=/var/cache/apt,type=cache,sharing=locked apt-get update
+RUN --mount=type=secret,id=token cat /run/secrets/token > /dev/null
+FROM gcr.io/distroless/base
+COPY --from=build /app /app
