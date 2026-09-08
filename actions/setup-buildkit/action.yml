@@ -1,0 +1,254 @@
+name: Setup BuildKit fleet
+author: Anirudh Yadav
+description: |-
+  Point docker buildx at a shared, in-cluster BuildKit fleet. Discovers the live
+  shards of each architecture from the headless Service's per-pod DNS, routes
+  this repository to a stable home shard by rendezvous hash, skips shards that
+  report themselves at their admission cap, and joins one shard per architecture
+  into a single multi-node buildx builder over mTLS. If a shard is unreachable
+  it fails over to the next-ranked one.
+
+  Drop-in replacement for docker/setup-buildx-action. Subsequent
+  docker/build-push-action steps use the shared builder transparently.
+
+branding:
+  icon: layers
+  color: blue
+
+inputs:
+  platforms:
+    description: |
+      Comma-separated platforms to enable, e.g. "linux/amd64,linux/arm64". Each
+      platform attaches the matching architecture's shard.
+    required: false
+    default: linux/amd64
+  shard-domain-suffix:
+    description: |
+      Cluster DNS suffix of the fleet's headless Services:
+      "<namespace>.svc.cluster.local". A shard's endpoint is
+      tcp://<service-prefix>-<arch>-<ordinal>.<service-prefix>-<arch>.<suffix>:1234
+    required: false
+    default: buildkit.svc.cluster.local
+  service-prefix:
+    description: Resource name prefix used by the chart (its `namePrefix` value).
+    required: false
+    default: buildkit
+  cert-dir:
+    description: |
+      Directory on the runner holding the client certificate. Mount the chart's
+      client Secret (default name buildkit-client-tls) here.
+    required: false
+    default: /certs
+  ca-file:
+    description: CA bundle file name inside cert-dir.
+    required: false
+    default: ca.crt
+  cert-file:
+    description: Client certificate file name inside cert-dir.
+    required: false
+    default: tls.crt
+  key-file:
+    description: Client key file name inside cert-dir.
+    required: false
+    default: tls.key
+  builder-name:
+    description: Name of the buildx builder to create and select.
+    required: false
+    default: buildkit-fleet
+  routing-key:
+    description: |
+      Key hashed to pick the home shard. The repository name gives every build
+      of a repository the same warm cache; widen it (e.g. "${{ github.repository }}/api")
+      when one repository fans out into many independent images.
+    required: false
+    default: ${{ github.repository }}
+  shards-fallback:
+    description: |
+      Shard count assumed when DNS discovery returns nothing (for example when
+      cluster DNS is unreachable from the runner). Leave empty to fail instead.
+      The BUILDKIT_SHARDS_N environment variable is honoured as well.
+    required: false
+    default: ""
+  max-shards:
+    description: Upper bound on the DNS discovery walk.
+    required: false
+    default: "64"
+  full-retry-seconds:
+    description: |
+      Wait at the home shard when it reports full before spilling, halving at
+      each later rank (15 → 7 → 3 → 1 → 0). 0 disables the wait.
+    required: false
+    default: "15"
+
+outputs:
+  builder:
+    description: Name of the buildx builder set as default.
+    value: ${{ inputs.builder-name }}
+  shard:
+    description: The routing key's home shard ordinal (rank 1 on the first platform).
+    value: ${{ steps.create.outputs.shard }}
+  selected:
+    description: |
+      Shard attached per architecture, e.g. "amd64=1,arm64=0". Differs from
+      `shard` after a spill (home shard at capacity) or a failover (unreachable).
+    value: ${{ steps.create.outputs.selected }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        PLATFORMS: ${{ inputs.platforms }}
+        CERT_DIR: ${{ inputs.cert-dir }}
+        CA_FILE: ${{ inputs.ca-file }}
+        CERT_FILE: ${{ inputs.cert-file }}
+        KEY_FILE: ${{ inputs.key-file }}
+      run: |
+        set -euo pipefail
+        for p in ${PLATFORMS//,/ }; do
+          case "$p" in
+            linux/amd64|linux/arm64) ;;
+            *) echo "::error::unsupported platform '$p' (supported: linux/amd64, linux/arm64)"; exit 1 ;;
+          esac
+        done
+        for f in "$CERT_FILE" "$KEY_FILE" "$CA_FILE"; do
+          if [ ! -r "$CERT_DIR/$f" ]; then
+            echo "::error::missing $CERT_DIR/$f — the runner pod must mount the fleet's client certificate Secret at $CERT_DIR"
+            exit 1
+          fi
+        done
+        if ! docker buildx version >/dev/null 2>&1; then
+          echo "::error::docker buildx not found on this runner"
+          exit 1
+        fi
+
+    - name: Create the sharded buildx builder
+      id: create
+      shell: bash
+      env:
+        BUILDER: ${{ inputs.builder-name }}
+        PLATFORMS: ${{ inputs.platforms }}
+        CERT_DIR: ${{ inputs.cert-dir }}
+        CA_FILE: ${{ inputs.ca-file }}
+        CERT_FILE: ${{ inputs.cert-file }}
+        KEY_FILE: ${{ inputs.key-file }}
+        SUFFIX: ${{ inputs.shard-domain-suffix }}
+        BUILDKIT_SERVICE_PREFIX: ${{ inputs.service-prefix }}
+        ROUTING_KEY: ${{ inputs.routing-key }}
+        SHARDS_FALLBACK: ${{ inputs.shards-fallback }}
+        BUILDKIT_SHARDS_MAX: ${{ inputs.max-shards }}
+        BUILDKIT_FULL_RETRY_SECONDS: ${{ inputs.full-retry-seconds }}
+      run: |
+        set -euo pipefail
+        source "${GITHUB_ACTION_PATH}/shard.sh"
+        source "${GITHUB_ACTION_PATH}/fleet.sh"
+
+        DRIVER_OPT="cacert=$CERT_DIR/$CA_FILE,cert=$CERT_DIR/$CERT_FILE,key=$CERT_DIR/$KEY_FILE"
+        endpoint() { echo "tcp://$(shard_host "$1" "$2" "$SUFFIX"):1234"; }
+        fallback_n="${SHARDS_FALLBACK:-${BUILDKIT_SHARDS_N:-}}"
+
+        # Clean slate for re-runs.
+        docker buildx rm "$BUILDER" >/dev/null 2>&1 || true
+
+        # One node per architecture with a FIXED node name. On spill or failover
+        # the same node name is re-attached, overwriting that architecture's node
+        # in place, so an already-bootstrapped node for the other architecture is
+        # never discarded.
+        made=false
+        shard_written=false
+        selected=()
+        attach() {  # <platform> <arch>
+          local p="$1" arch="$2" node="node-${arch}" ords rank ord ep mode pass idx wait_s
+
+          mapfile -t ords < <(discover_ordinals "$arch" "$SUFFIX" "${BUILDKIT_SHARDS_MAX:-64}")
+          if (( ${#ords[@]} == 0 )); then
+            if [[ ! "$fallback_n" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::no ${arch} shard resolves in DNS ($(shard_host "$arch" 0 "$SUFFIX")) and no shards-fallback is set"
+              return 1
+            fi
+            echo "::warning::${arch}: DNS discovery found no shards; assuming ${fallback_n} from shards-fallback"
+            mapfile -t ords < <(seq 0 $((fallback_n-1)))
+          fi
+          mapfile -t rank < <(hrw_rank_list "${ROUTING_KEY}" "${ords[@]}")
+          echo "${arch}: ${#ords[@]} shard(s) [${ords[*]}]; key ${ROUTING_KEY} → home shard ${rank[0]} (order: ${rank[*]})"
+          if ! $shard_written; then echo "shard=${rank[0]}" >> "$GITHUB_OUTPUT"; shard_written=true; fi
+
+          # Pass 1 walks the rank order skipping shards that report full (a cold
+          # build elsewhere beats a queue). Pass 2 ignores load: when every shard
+          # is full, the home shard's warm cache is still the best place to queue.
+          for pass in 1 2; do
+            idx=-1
+            for ord in "${rank[@]}"; do
+              idx=$((idx + 1))
+              if (( pass == 1 )) && shard_full "$arch" "$ord" "$SUFFIX"; then
+                wait_s=$(full_retry_wait "$idx")
+                if (( wait_s > 0 )); then
+                  echo "${arch}: shard ${ord} is at its admission cap; waiting ${wait_s}s for a slot"
+                  sleep "$wait_s"
+                  if shard_full "$arch" "$ord" "$SUFFIX"; then
+                    echo "${arch}: shard ${ord} still full after ${wait_s}s; trying the next"
+                    continue
+                  fi
+                  echo "${arch}: shard ${ord} freed a slot after ${wait_s}s"
+                else
+                  echo "${arch}: shard ${ord} is at its admission cap; trying the next"
+                  continue
+                fi
+              fi
+              ep=$(endpoint "$arch" "$ord")
+              if $made; then mode="--append"; else mode=""; fi
+              if docker buildx create --name "$BUILDER" $mode --node "$node" --driver remote --driver-opt "$DRIVER_OPT" --platform "$p" --bootstrap "$ep" 2>/tmp/buildkit-fleet-err; then
+                made=true
+                if [[ "$ord" != "${rank[0]}" ]]; then
+                  if (( pass == 1 )); then
+                    echo "::notice::${arch}: home shard ${rank[0]} is at capacity; building on shard ${ord} (cold for this key)"
+                  else
+                    echo "::warning::${arch}: shard ${rank[0]} unreachable; failed over to shard ${ord} (cold, re-warms from the registry cache)"
+                  fi
+                fi
+                selected+=("${arch}=${ord}")
+                return 0
+              fi
+              # A failed create still registers the builder/node; the next attempt
+              # must --append and reuse the node name to overwrite it in place.
+              made=true
+            done
+            (( pass == 1 )) && echo "${arch}: every reachable shard is at capacity; queuing on the home shard"
+          done
+          echo "::error::no ${arch} shard reachable (tried ordinals: ${rank[*]})"
+          cat /tmp/buildkit-fleet-err >&2; return 1
+        }
+
+        for p in ${PLATFORMS//,/ }; do
+          case "$p" in
+            linux/amd64) arch=amd64 ;;
+            linux/arm64) arch=arm64 ;;
+          esac
+          attach "$p" "$arch"
+        done
+        echo "selected=$(IFS=,; echo "${selected[*]}")" >> "$GITHUB_OUTPUT"
+        docker buildx use "$BUILDER"
+
+    - name: Show builder status
+      shell: bash
+      env:
+        BUILDER: ${{ inputs.builder-name }}
+      run: |
+        docker buildx ls
+        docker buildx inspect "$BUILDER"
+
+    - name: Diagnostics on failure
+      if: failure()
+      shell: bash
+      env:
+        BUILDER: ${{ inputs.builder-name }}
+        CERT_DIR: ${{ inputs.cert-dir }}
+        SUFFIX: ${{ inputs.shard-domain-suffix }}
+        PREFIX: ${{ inputs.service-prefix }}
+      run: |
+        echo "::group::setup-buildkit diagnostics"
+        echo "Builder: $BUILDER"; echo "Cert dir:"; ls -la "$CERT_DIR" 2>&1 || true
+        echo "Builders:"; docker buildx ls 2>&1 || true
+        echo "::endgroup::"
+        echo "::warning::Common causes: (1) client certificate Secret not mounted at $CERT_DIR; (2) no shard pod Ready; (3) a NetworkPolicy blocks :1234 from this namespace; (4) cluster DNS cannot resolve ${PREFIX}-<arch>-0.${PREFIX}-<arch>.${SUFFIX} and shards-fallback is unset."
