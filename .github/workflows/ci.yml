@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  actions:
+    name: Action unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: setup-buildkit
+        run: |
+          bash actions/setup-buildkit/shard_test.sh
+          bash actions/setup-buildkit/fleet_test.sh
+      - name: strip-cache-mounts
+        run: |
+          bash actions/strip-cache-mounts/is-release_test.sh
+          bash actions/strip-cache-mounts/strip-cache-mounts_test.sh
+      - name: shellcheck
+        run: |
+          sudo apt-get install -y shellcheck >/dev/null
+          # -x follows `source ./x.sh` in the tests; info-level findings (stubbed
+          # functions invoked indirectly, eval-ed assertion strings) are test idioms.
+          shellcheck -x -S warning -s bash actions/setup-buildkit/*.sh actions/strip-cache-mounts/*.sh
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: lint
+        run: helm lint charts/buildkit-fleet
+      - name: render defaults and every example
+        run: |
+          set -e
+          helm template t charts/buildkit-fleet --namespace buildkit > /tmp/default.yaml
+          for f in charts/buildkit-fleet/examples/*.yaml; do
+            helm template t charts/buildkit-fleet --namespace buildkit -f "$f" > "/tmp/$(basename "$f")"
+          done
+          grep -c '^kind: StatefulSet' /tmp/default.yaml
