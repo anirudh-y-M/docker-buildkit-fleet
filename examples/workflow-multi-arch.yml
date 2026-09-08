@@ -1,0 +1,49 @@
+# Native multi-architecture build: each platform is built on a shard of that
+# architecture, no QEMU. Note `platforms` appears twice — on setup-buildkit it
+# chooses which shards join the builder, on build-push-action it drives the
+# build. Registry cache export is skipped for multi-platform builds: buildx
+# exports one ref from each node and the last writer wins (docker/buildx#1044).
+name: image (multi-arch)
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: dockerfile
+        uses: <owner>/image-buildkit-fleet/actions/strip-cache-mounts@v0.1.0
+        with:
+          dockerfile: Dockerfile
+
+      - id: buildkit
+        uses: <owner>/image-buildkit-fleet/actions/setup-buildkit@v0.1.0
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.dockerfile.outputs.file }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+
+      - run: echo "built on shards ${{ steps.buildkit.outputs.selected }} (home ${{ steps.buildkit.outputs.shard }})"

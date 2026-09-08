@@ -1,0 +1,49 @@
+# Minimal consumer: a single-architecture image built on the fleet, with the
+# cache-mount control on release builds and a registry cache export gated by the
+# same release predicate.
+name: image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux]   # a runner pod with /certs mounted
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: dockerfile
+        uses: <owner>/image-buildkit-fleet/actions/strip-cache-mounts@v0.1.0
+        with:
+          dockerfile: Dockerfile
+
+      - uses: <owner>/image-buildkit-fleet/actions/setup-buildkit@v0.1.0
+        with:
+          platforms: linux/amd64
+          shard-domain-suffix: buildkit.svc.cluster.local
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.dockerfile.outputs.file }}
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          # Read the registry cache on every build; write it only on release
+          # builds. ignore-error keeps a registry hiccup during the export from
+          # failing a release whose image is already pushed.
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+          cache-to: ${{ steps.dockerfile.outputs.is_release == 'true' && format('type=registry,ref=ghcr.io/{0}:buildcache,mode=max,ignore-error=true', github.repository) || '' }}

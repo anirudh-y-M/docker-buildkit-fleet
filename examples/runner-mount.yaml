@@ -1,0 +1,45 @@
+# Projecting the client certificate into actions-runner-controller runner pods.
+#
+# The chart issues the client Certificate into every namespace listed under
+# trust.clientCertificate.namespaces (default: actions-runner) as the Secret
+# buildkit-client-tls. Runner pods mount it at /certs, which is where
+# setup-buildkit looks by default.
+#
+# `optional: true` matters: cert-manager creates the Secret after the fleet is
+# installed, and clusters without the fleet still have to start runners. Without
+# it every runner pod in the namespace would sit in ContainerCreating on
+# FailedMount. With it, /certs is simply empty and only jobs that call
+# setup-buildkit fail, with the action's own error.
+#
+# gha-runner-scale-set Helm values:
+template:
+  spec:
+    containers:
+      - name: runner
+        image: ghcr.io/actions/actions-runner:latest
+        command: ["/home/runner/run.sh"]
+        volumeMounts:
+          - name: buildkit-client-certs
+            mountPath: /certs
+            readOnly: true
+    volumes:
+      - name: buildkit-client-certs
+        secret:
+          secretName: buildkit-client-tls
+          optional: true
+---
+# The same as a kustomize JSON6902 patch applied to every AutoscalingRunnerSet
+# in an overlay, so a scale set added later inherits the mount:
+#
+# patches:
+#   - target:
+#       group: actions.github.com
+#       version: v1alpha1
+#       kind: AutoscalingRunnerSet
+#     patch: |-
+#       - op: add
+#         path: /spec/template/spec/containers/0/volumeMounts/-
+#         value: { name: buildkit-client-certs, mountPath: /certs, readOnly: true }
+#       - op: add
+#         path: /spec/template/spec/volumes/-
+#         value: { name: buildkit-client-certs, secret: { secretName: buildkit-client-tls, optional: true } }
