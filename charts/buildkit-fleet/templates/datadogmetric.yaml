@@ -1,0 +1,21 @@
+{{- if and .Values.autoscaling.enabled .Values.autoscaling.externalMetric.enabled .Values.autoscaling.externalMetric.datadog.enabled }}
+{{- $root := . }}
+{{- range $arch, $cfg := .Values.architectures }}
+{{- if $cfg.enabled }}
+{{- $name := include "buildkit-fleet.archName" (dict "root" $root "arch" $arch) }}
+---
+# The query behind the HPA's external metric. Lives in a CR because an HPA metric
+# name cannot express a cross-pod sum. Requires the Datadog cluster agent's
+# metrics provider with DatadogMetric enabled.
+apiVersion: datadoghq.com/v1alpha1
+kind: DatadogMetric
+metadata:
+  name: {{ $name }}-inflight
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "buildkit-fleet.labels" $root | nindent 4 }}
+spec:
+  query: {{ include "buildkit-fleet.tplArch" (dict "root" $root "arch" $arch "name" $name "tmpl" $root.Values.autoscaling.externalMetric.datadog.query) | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

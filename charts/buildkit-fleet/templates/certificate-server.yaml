@@ -1,0 +1,38 @@
+{{- if .Values.trust.enabled }}
+{{- $root := . }}
+{{- range $arch, $cfg := .Values.architectures }}
+{{- if $cfg.enabled }}
+{{- $name := include "buildkit-fleet.archName" (dict "root" $root "arch" $arch) }}
+---
+# Server certificate for this architecture's shards. cert-manager writes tls.crt,
+# tls.key and ca.crt; buildkitd verifies client certificates against ca.crt.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}-server
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "buildkit-fleet.labels" $root | nindent 4 }}
+spec:
+  secretName: {{ $name }}-server-tls
+  duration: {{ $root.Values.trust.leafDuration }}
+  renewBefore: {{ $root.Values.trust.leafRenewBefore }}
+  commonName: {{ $name }}.{{ $root.Release.Namespace }}.svc.cluster.local
+  dnsNames:
+    - {{ $name }}.{{ $root.Release.Namespace }}.svc.cluster.local
+    - {{ $name }}.{{ $root.Release.Namespace }}.svc
+    - {{ $name }}
+    # Wildcard covers every shard ordinal: scaling needs no re-issue.
+    - '*.{{ $name }}.{{ $root.Release.Namespace }}.svc.cluster.local'
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  privateKey:
+    {{- toYaml $root.Values.trust.privateKey | nindent 4 }}
+  issuerRef:
+    name: {{ include "buildkit-fleet.issuerName" $root }}
+    kind: {{ $root.Values.trust.issuerRef.kind }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,22 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- $root := . }}
+{{- range $arch, $cfg := .Values.architectures }}
+{{- if $cfg.enabled }}
+---
+# Node drains take shards down one at a time, so a rolling upgrade degrades ~1/N
+# of repositories instead of blacking out the architecture.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "buildkit-fleet.archName" (dict "root" $root "arch" $arch) }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "buildkit-fleet.labels" $root | nindent 4 }}
+spec:
+  maxUnavailable: {{ $root.Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "buildkit-fleet.selectorLabels" (dict "root" $root "arch" $arch) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,212 @@
+{{- $root := . }}
+{{- $prefix := include "buildkit-fleet.prefix" . }}
+{{- range $arch, $cfg := .Values.architectures }}
+{{- if $cfg.enabled }}
+{{- $name := include "buildkit-fleet.archName" (dict "root" $root "arch" $arch) }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "buildkit-fleet.labels" $root | nindent 4 }}
+    {{- include "buildkit-fleet.selectorLabels" (dict "root" $root "arch" $arch) | nindent 4 }}
+  {{- with $root.Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  serviceName: {{ $name }}
+  # Shards are independent single-writer workers; no ordered start-up needed.
+  podManagementPolicy: Parallel
+  {{- if not $root.Values.autoscaling.enabled }}
+  replicas: {{ $cfg.autoscaling.minReplicas }}
+  {{- end }}
+  # A shard the autoscaler removes keeps its cache disk, so the ordinal comes back
+  # warm on the next scale-out. Deleting the StatefulSet never discards caches
+  # either. Cost: idle disks between minReplicas and maxReplicas.
+  persistentVolumeClaimRetentionPolicy:
+    whenScaled: Retain
+    whenDeleted: Retain
+  selector:
+    matchLabels:
+      {{- include "buildkit-fleet.selectorLabels" (dict "root" $root "arch" $arch) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "buildkit-fleet.labels" $root | nindent 8 }}
+        {{- include "buildkit-fleet.selectorLabels" (dict "root" $root "arch" $arch) | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $root.Template.BasePath "/configmap-buildkitd.yaml") $root | sha256sum }}
+        {{- if $root.Values.metrics.prometheusAnnotations }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "6060"
+        prometheus.io/path: /metrics
+        {{- end }}
+        {{- with $root.Values.metrics.extraPodAnnotations }}
+        {{- range $k, $v := . }}
+        {{ $k }}: {{ include "buildkit-fleet.tplArch" (dict "root" $root "arch" $arch "name" $name "tmpl" $v) | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $cfg.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      terminationGracePeriodSeconds: {{ $root.Values.terminationGracePeriodSeconds }}
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        # Skip the recursive chown of a large cache disk on every start.
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: buildkit
+          image: {{ include "buildkit-fleet.image" $root }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          # The image entrypoint is `rootlesskit buildkitd`. The wrapper derives the
+          # admission cap from the CPU limit via the Downward API so a resize keeps
+          # the ratio; the load-probe sidecar applies the same rule.
+          command:
+            - sh
+            - -c
+            - p=$(( BUILDKIT_CPU_LIMIT * BUILDKIT_CAP_PERCENT / 100 )); [ "$p" -ge 1 ] || p=1; exec rootlesskit buildkitd --oci-max-parallelism "$p" "$@"
+            - buildkitd
+          args:
+            - --addr
+            - unix:///run/user/1000/buildkit/buildkitd.sock
+            - --addr
+            - tcp://0.0.0.0:1234
+            - --tlscacert
+            - /certs/ca.crt
+            - --tlscert
+            - /certs/tls.crt
+            - --tlskey
+            - /certs/tls.key
+            - --config
+            - /home/user/.config/buildkit/buildkitd.toml
+            - --debugaddr
+            - 0.0.0.0:6060
+          env:
+            - name: BUILDKIT_HOST
+              value: unix:///run/user/1000/buildkit/buildkitd.sock
+            - name: BUILDKIT_CAP_PERCENT
+              value: {{ $root.Values.admissionCapPercent | quote }}
+            - name: BUILDKIT_CPU_LIMIT # whole cores; divisor 1 rounds up
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.cpu
+          securityContext:
+            # Rootless buildkitd sets up its own user namespace; that needs
+            # unconfined seccomp/AppArmor. It still runs as uid 1000.
+            seccompProfile:
+              type: Unconfined
+            appArmorProfile:
+              type: Unconfined
+            runAsNonRoot: true
+          ports:
+            - containerPort: 1234
+              name: grpc
+              protocol: TCP
+            - containerPort: 6060
+              name: metrics
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command: ["buildctl", "debug", "workers"]
+            {{- toYaml $root.Values.probes.readiness | nindent 12 }}
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            {{- toYaml $root.Values.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml $cfg.resources | nindent 12 }}
+          volumeMounts:
+            - name: cache
+              mountPath: /home/user/.local/share/buildkit
+            - name: certs
+              mountPath: /certs
+              readOnly: true
+            - name: config
+              mountPath: /home/user/.config/buildkit
+              readOnly: true
+        {{- if $root.Values.loadProbe.enabled }}
+        # Load probe: GET :8080/load -> {"inflight","cap","full"}; GET :8080/metrics
+        # -> Prometheus text. Same image as buildkitd (busybox nc/awk), so nothing
+        # extra to mirror or pin.
+        - name: load
+          image: {{ include "buildkit-fleet.image" $root }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          command: ["/probe/serve"]
+          env:
+            - name: BUILDKIT_CAP_PERCENT
+              value: {{ $root.Values.admissionCapPercent | quote }}
+            - name: BUILDKIT_CPU_LIMIT
+              valueFrom:
+                resourceFieldRef:
+                  containerName: buildkit
+                  resource: limits.cpu
+          ports:
+            - containerPort: 8080
+              name: load
+              protocol: TCP
+          livenessProbe:
+            tcpSocket:
+              port: load
+            periodSeconds: 60
+          resources:
+            {{- toYaml $root.Values.loadProbe.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: load-probe
+              mountPath: /probe
+              readOnly: true
+        {{- end }}
+      volumes:
+        - name: certs
+          secret:
+            secretName: {{ $name }}-server-tls
+        - name: config
+          configMap:
+            name: {{ $prefix }}-config
+        {{- if $root.Values.loadProbe.enabled }}
+        - name: load-probe
+          configMap:
+            name: {{ $prefix }}-load-probe
+            defaultMode: 0755
+        {{- end }}
+      {{- with $cfg.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cfg.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cfg.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  # One ReadWriteOnce disk per shard keeps BuildKit's single-writer invariant.
+  volumeClaimTemplates:
+    - metadata:
+        name: cache
+      spec:
+        accessModes:
+          {{- toYaml $cfg.storage.accessModes | nindent 10 }}
+        {{- with include "buildkit-fleet.storageClassName" (dict "root" $root "arch" $arch "cfg" $cfg) }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $cfg.storage.size }}
+{{- end }}
+{{- end }}

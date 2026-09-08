@@ -1,0 +1,20 @@
+{{- $root := . }}
+{{- range $arch, $cfg := .Values.architectures }}
+{{- if and $cfg.enabled $cfg.storageClass.create }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ include "buildkit-fleet.storageClassName" (dict "root" $root "arch" $arch "cfg" $cfg) }}
+  labels:
+    {{- include "buildkit-fleet.labels" $root | nindent 4 }}
+provisioner: {{ required (printf "architectures.%s.storageClass.provisioner is required when create is true" $arch) $cfg.storageClass.provisioner }}
+{{- with $cfg.storageClass.parameters }}
+parameters:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+volumeBindingMode: {{ $cfg.storageClass.volumeBindingMode }}
+allowVolumeExpansion: {{ $cfg.storageClass.allowVolumeExpansion }}
+reclaimPolicy: {{ $cfg.storageClass.reclaimPolicy }}
+{{- end }}
+{{- end }}

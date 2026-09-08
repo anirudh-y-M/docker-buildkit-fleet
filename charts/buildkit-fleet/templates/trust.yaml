@@ -1,0 +1,72 @@
+{{- if .Values.trust.enabled }}
+{{- $prefix := include "buildkit-fleet.prefix" . }}
+{{- if .Values.trust.createCA }}
+# Trust root: selfSigned ClusterIssuer -> CA Certificate -> CA ClusterIssuer -> leaves.
+# Cluster-scoped so leaves in different namespaces chain to one CA.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ $prefix }}-selfsigned
+  labels:
+    {{- include "buildkit-fleet.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+# The CA lives in cert-manager's cluster-resource-namespace: a CA ClusterIssuer
+# reads its signing Secret from there and nowhere else.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $prefix }}-ca
+  namespace: {{ .Values.trust.caNamespace }}
+  labels:
+    {{- include "buildkit-fleet.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: {{ $prefix }}-ca
+  secretName: {{ $prefix }}-ca
+  duration: {{ .Values.trust.caDuration }}
+  renewBefore: 8760h
+  privateKey:
+    {{- toYaml .Values.trust.privateKey | nindent 4 }}
+  issuerRef:
+    name: {{ $prefix }}-selfsigned
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ include "buildkit-fleet.issuerName" . }}
+  labels:
+    {{- include "buildkit-fleet.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ $prefix }}-ca
+{{- end }}
+{{- range .Values.trust.clientCertificate.namespaces }}
+---
+# Client certificate presented by CI runners. Issued straight into the runner
+# namespace because a Secret only mounts within its own namespace.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $prefix }}-client
+  namespace: {{ . }}
+  labels:
+    {{- include "buildkit-fleet.labels" $ | nindent 4 }}
+spec:
+  secretName: {{ $.Values.trust.clientCertificate.secretName }}
+  duration: {{ $.Values.trust.leafDuration }}
+  renewBefore: {{ $.Values.trust.leafRenewBefore }}
+  commonName: {{ $prefix }}-client
+  usages:
+    - client auth
+    - digital signature
+    - key encipherment
+  privateKey:
+    {{- toYaml $.Values.trust.privateKey | nindent 4 }}
+  issuerRef:
+    name: {{ include "buildkit-fleet.issuerName" $ }}
+    kind: {{ $.Values.trust.issuerRef.kind }}
+{{- end }}
+{{- end }}

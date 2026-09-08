@@ -1,0 +1,46 @@
+{{- if .Values.autoscaling.enabled }}
+{{- $root := . }}
+{{- range $arch, $cfg := .Values.architectures }}
+{{- if $cfg.enabled }}
+{{- $name := include "buildkit-fleet.archName" (dict "root" $root "arch" $arch) }}
+---
+# CPU measures work being done; the optional external metric measures work
+# accepted. The HPA takes the highest recommendation, so the second metric can
+# only ever add shards. The stabilization window keeps the LOWEST value seen
+# inside it, so a metric must stay over target for the whole window.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "buildkit-fleet.labels" $root | nindent 4 }}
+    {{- include "buildkit-fleet.selectorLabels" (dict "root" $root "arch" $arch) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: {{ $name }}
+  minReplicas: {{ $cfg.autoscaling.minReplicas }}
+  maxReplicas: {{ $cfg.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $root.Values.autoscaling.cpuUtilization }}
+    {{- if $root.Values.autoscaling.externalMetric.enabled }}
+    - type: External
+      external:
+        metric:
+          name: {{ include "buildkit-fleet.tplArch" (dict "root" $root "arch" $arch "name" $name "tmpl" $root.Values.autoscaling.externalMetric.name) | quote }}
+        target:
+          type: AverageValue
+          averageValue: {{ $root.Values.autoscaling.externalMetric.targetPerShard | quote }}
+    {{- end }}
+  behavior:
+    {{- toYaml $root.Values.autoscaling.behavior | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}

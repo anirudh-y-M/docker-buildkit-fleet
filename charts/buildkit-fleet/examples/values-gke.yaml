@@ -1,0 +1,26 @@
+# GKE: PD-SSD for amd64, a Hyperdisk StorageClass for arm64 (C4A nodes cannot
+# attach PD-SSD). Node pools are selected by label; adjust to your own labels.
+architectures:
+  amd64:
+    storage:
+      storageClassName: premium-rwo
+    nodeSelector:
+      kubernetes.io/arch: amd64
+      cloud.google.com/gke-nodepool: buildkit-amd64
+  arm64:
+    storageClass:
+      create: true
+      provisioner: pd.csi.storage.gke.io
+      parameters:
+        type: hyperdisk-balanced
+    nodeSelector:
+      kubernetes.io/arch: arm64
+      cloud.google.com/gke-nodepool: buildkit-arm64
+    tolerations:
+      - key: kubernetes.io/arch
+        operator: Equal
+        value: arm64
+        effect: NoSchedule
+registryMirrors:
+  docker.io:
+    - mirror.gcr.io

@@ -1,0 +1,91 @@
+{{- if .Values.loadProbe.enabled }}
+{{- /*
+Scripts for the `load` sidecar, mounted 0755 at /probe.
+  serve - PID 1 of the sidecar: supervises the listener and handles SIGTERM.
+  load  - the responder; busybox `nc -e` runs it per connection with the socket
+          on stdin/stdout.
+GET /load returns JSON for the setup-buildkit action; GET /metrics returns
+Prometheus text for your metrics agent. Same numbers, two representations.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "buildkit-fleet.prefix" . }}-load-probe
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "buildkit-fleet.labels" . | nindent 4 }}
+data:
+  serve: |
+    #!/bin/sh
+    # PID 1 in a container has no default signal dispositions, so a shell with no
+    # handler installed IGNORES SIGTERM and the pod sits in Terminating for the
+    # whole grace period. Install the handler first, and keep the listener in the
+    # background so `wait` is interruptible.
+    set -u
+    term() { kill "$child" 2>/dev/null; exit 0; }
+    trap term TERM INT
+
+    # `-e` is a compile-time busybox option. Without it, degrade instead of
+    # crash-looping: the action treats "no answer" as "not full" (fail open).
+    if ! nc --help 2>&1 | grep -q -- '-e'; then
+      echo "load probe disabled: this busybox nc has no -e; clients fail open" >&2
+      while :; do sleep 86400 & child=$!; wait "$child"; done
+    fi
+
+    # busybox `nc -l -e` serves one connection then exits, so supervise it.
+    while :; do
+      nc -l -p 8080 -e /probe/load & child=$!
+      wait "$child"
+    done
+  load: |
+    #!/bin/sh
+    set -u
+    # Consume the request up to the blank line so the kernel sends FIN, not RST,
+    # when we exit (unread bytes on close reset the connection). 2s guard.
+    cr=$(printf '\r')
+    path=/
+    lineno=0
+    while IFS= read -r -t 2 line; do
+      line=${line%"$cr"}
+      lineno=$((lineno + 1))
+      [ "$lineno" -eq 1 ] && path=$(printf '%s' "$line" | cut -d' ' -f2)
+      [ -z "$line" ] && break
+    done
+    # One gRPC connection per accepted build (running, or queued on the admission
+    # cap - a queued client keeps its connection open). /proc/net/tcp{,6}: field
+    # 2 is local "HEXIP:PORT", field 4 the state (01 = ESTABLISHED); 04D2 = 1234.
+    inflight=$(cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk '
+      NR > 1 && $4 == "01" { split($2, a, ":"); if (a[2] == "04D2") n++ }
+      END { print n + 0 }')
+    # Same rule as --oci-max-parallelism in the StatefulSet.
+    cores=${BUILDKIT_CPU_LIMIT:-0}
+    pct=${BUILDKIT_CAP_PERCENT:-80}
+    cap=$(( cores * pct / 100 )); [ "$cap" -ge 1 ] || cap=1
+    if [ "$inflight" -ge "$cap" ]; then full=true; else full=false; fi
+
+    reply() { # <content-type> <body-without-trailing-newline>
+      printf 'HTTP/1.0 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s\n' \
+        "$1" "$(( ${#2} + 1 ))" "$2"
+    }
+
+    case "$path" in
+      /metrics*)
+        util=$(awk -v i="$inflight" -v c="$cap" 'BEGIN { printf "%.4f", (c > 0 ? i / c : 0) }')
+        body=$(printf '%s\n' \
+          '# HELP builds_inflight Builds accepted by this shard: running plus queued on the admission cap.' \
+          '# TYPE builds_inflight gauge' \
+          "builds_inflight ${inflight}" \
+          '# HELP builds_cap Admission cap for this shard (--oci-max-parallelism).' \
+          '# TYPE builds_cap gauge' \
+          "builds_cap ${cap}" \
+          '# HELP builds_utilization builds_inflight divided by builds_cap.' \
+          '# TYPE builds_utilization gauge' \
+          "builds_utilization ${util}")
+        reply 'text/plain; version=0.0.4; charset=utf-8' "$body"
+        ;;
+      *)
+        reply 'application/json' \
+          "$(printf '{"inflight":%d,"cap":%d,"cpu_limit":%d,"full":%s}' "$inflight" "$cap" "$cores" "$full")"
+        ;;
+    esac
+{{- end }}

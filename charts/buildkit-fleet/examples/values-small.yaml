@@ -1,0 +1,17 @@
+# A single-node-per-arch starter fleet for evaluation. Fits two 8-vCPU nodes.
+architectures:
+  amd64:
+    resources:
+      requests: { cpu: "6", memory: 24Gi }
+      limits: { cpu: "6", memory: 24Gi }
+    autoscaling: { minReplicas: 1, maxReplicas: 2 }
+    storage: { size: 100Gi }
+  arm64:
+    enabled: false
+gc:
+  reservedSpace: 85899345920 # 80 GiB on a 100 GiB disk
+trust:
+  clientCertificate:
+    namespaces: [actions-runner]
+networkPolicy:
+  allowedNamespaces: [actions-runner]

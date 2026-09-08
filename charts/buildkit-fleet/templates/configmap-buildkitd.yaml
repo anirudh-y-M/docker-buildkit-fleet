@@ -1,0 +1,44 @@
+{{- /*
+buildkitd.toml. TLS material and listeners are passed as CLI flags in the
+StatefulSet; this file carries registry mirrors and the GC policy.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "buildkit-fleet.prefix" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "buildkit-fleet.labels" . | nindent 4 }}
+data:
+  buildkitd.toml: |
+    root = "/home/user/.local/share/buildkit"
+    {{- range $host, $mirrors := .Values.registryMirrors }}
+
+    [registry."{{ $host }}"]
+      mirrors = {{ toJson $mirrors }}
+    {{- end }}
+
+    [worker.oci]
+      enabled = true
+      # Rootless buildkitd without a privileged process sandbox.
+      noProcessSandbox = true
+      gc = true
+      # Size the collector converges on. Replaced gckeepstorage in BuildKit v0.17.
+      reservedSpace = {{ if kindIs "string" .Values.gc.reservedSpace }}{{ .Values.gc.reservedSpace | quote }}{{ else }}{{ .Values.gc.reservedSpace | int64 }}{{ end }}
+      {{- range .Values.gc.policies }}
+
+      {{- with .description }}
+      # {{ . }}
+      {{- end }}
+      [[worker.oci.gcpolicy]]
+        keepDuration = {{ .keepDuration }}
+        filters = {{ toJson .filters }}
+      {{- end }}
+
+      # Size-based backstop; runs continuously regardless of age.
+      [[worker.oci.gcpolicy]]
+        reservedSpace = {{ if kindIs "string" .Values.gc.reservedSpace }}{{ .Values.gc.reservedSpace | quote }}{{ else }}{{ .Values.gc.reservedSpace | int64 }}{{ end }}
+    {{- with .Values.extraBuildkitdConfig }}
+
+    {{ . | nindent 4 }}
+    {{- end }}

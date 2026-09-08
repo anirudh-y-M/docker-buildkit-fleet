@@ -1,0 +1,39 @@
+{{- $root := . }}
+{{- range $arch, $cfg := .Values.architectures }}
+{{- if $cfg.enabled }}
+{{- $name := include "buildkit-fleet.archName" (dict "root" $root "arch" $arch) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "buildkit-fleet.labels" $root | nindent 4 }}
+    {{- include "buildkit-fleet.selectorLabels" (dict "root" $root "arch" $arch) | nindent 4 }}
+spec:
+  # Headless: every shard gets <name>-<n>.<name>.<namespace>.svc.cluster.local,
+  # which is how clients address a specific shard.
+  clusterIP: None
+  # Keep the per-pod record while a shard is busy-but-NotReady, so a probe flap
+  # does not send a repository's builds to a cold shard. mTLS still gates use.
+  publishNotReadyAddresses: true
+  ports:
+    - name: grpc
+      port: 1234
+      targetPort: 1234
+      protocol: TCP
+    - name: metrics
+      port: 6060
+      targetPort: 6060
+      protocol: TCP
+    {{- if $root.Values.loadProbe.enabled }}
+    - name: load
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "buildkit-fleet.selectorLabels" (dict "root" $root "arch" $arch) | nindent 4 }}
+{{- end }}
+{{- end }}

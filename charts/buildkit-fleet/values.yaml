@@ -1,0 +1,252 @@
+# Default values for buildkit-fleet.
+#
+# The defaults are conservative starting points. Start small, measure your own
+# workload (see docs/measuring.md), then resize.
+
+# Resource names are "<namePrefix>-<arch>" (StatefulSet, Service, HPA, PDB,
+# server Certificate). The setup-buildkit action derives shard DNS names from the
+# same prefix, so change both together (its `service-prefix` input).
+namePrefix: buildkit
+
+# The chart is installed into the release namespace. Set createNamespace when you
+# want the chart to own the Namespace object (useful for annotations such as
+# excluding it from a request right-sizer).
+namespace:
+  create: false
+  annotations: {}
+
+image:
+  # Rootless BuildKit. Pin a digest in production; pull through a registry mirror
+  # if your CI volume is high enough to meet Docker Hub rate limits.
+  repository: docker.io/moby/buildkit
+  tag: v0.27.0-rootless
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Percentage of the shard's CPU limit admitted as concurrent build steps
+# (buildkitd --oci-max-parallelism). Steps beyond the cap queue inside BuildKit
+# instead of time-slicing the CPU, which keeps per-build latency and memory flat
+# under bursts. The load-probe sidecar uses the same rule to report "full".
+admissionCapPercent: 80
+
+# buildkitd drains in-flight builds on SIGTERM; the Kubernetes default of 30s
+# cuts them mid-step.
+terminationGracePeriodSeconds: 600
+
+# Registry mirrors written into buildkitd.toml. Strongly recommended for
+# docker.io: a fleet shared by many repositories concentrates pulls onto a few
+# egress IPs and will hit Docker Hub's anonymous rate limit.
+# Example:
+#   registryMirrors:
+#     docker.io:
+#       - mirror.gcr.io
+registryMirrors: {}
+
+# Extra buildkitd.toml appended verbatim after the generated sections.
+extraBuildkitdConfig: ""
+
+# Garbage collection. BuildKit prunes continuously, in-process; no CronJob needed.
+gc:
+  # Size the GC converges on. Leave ~15-30% of the cache disk above it: GC is
+  # lazy, so this margin absorbs overshoot between sweeps. Accepts bytes, or a
+  # quoted string BuildKit understands ("250GB", "80%").
+  reservedSpace: 268435456000 # 250 GiB on a 300 GiB disk
+  # TTL policies, applied before the size backstop.
+  policies:
+    - description: Frontends and git checkouts churn fast
+      keepDuration: 172800 # 48h
+      filters: ["type==frontend", "type==source.git.checkout"]
+    - description: RUN cache mounts, step results and local sources
+      keepDuration: 604800 # 7d
+      filters: ["type==exec.cachemount", "type==source.local", "type==regular"]
+
+# One entry per CPU architecture. Disable an architecture you have no nodes for.
+# Each shard is one pod with one ReadWriteOnce disk; BuildKit is single-writer
+# per cache, so never share a disk between shards.
+architectures:
+  amd64:
+    enabled: true
+    platform: linux/amd64
+    # requests == limits gives the pod Guaranteed QoS and, with the static CPU
+    # manager policy, an exclusive cpuset. Keep them equal.
+    resources:
+      requests: { cpu: "28", memory: 50Gi }
+      limits: { cpu: "28", memory: 50Gi }
+    autoscaling:
+      minReplicas: 2
+      maxReplicas: 4
+    storage:
+      size: 300Gi
+      # Empty uses the cluster default StorageClass. Must support online volume
+      # expansion if you ever want to grow the cache.
+      storageClassName: ""
+      accessModes: [ReadWriteOnce]
+    # Optionally create a StorageClass for this architecture (for example a
+    # hyperdisk class on GKE arm64 nodes that cannot attach PD-SSD).
+    storageClass:
+      create: false
+      name: ""
+      provisioner: ""
+      parameters: {}
+      volumeBindingMode: WaitForFirstConsumer
+      allowVolumeExpansion: true
+      reclaimPolicy: Delete
+    nodeSelector:
+      kubernetes.io/arch: amd64
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+  arm64:
+    enabled: true
+    platform: linux/arm64
+    resources:
+      requests: { cpu: "28", memory: 50Gi }
+      limits: { cpu: "28", memory: 50Gi }
+    autoscaling:
+      minReplicas: 2
+      maxReplicas: 4
+    storage:
+      size: 300Gi
+      storageClassName: ""
+      accessModes: [ReadWriteOnce]
+    storageClass:
+      create: false
+      name: ""
+      provisioner: ""
+      parameters: {}
+      volumeBindingMode: WaitForFirstConsumer
+      allowVolumeExpansion: true
+      reclaimPolicy: Delete
+    nodeSelector:
+      kubernetes.io/arch: arm64
+    # Most managed Kubernetes distributions taint arm64 nodes.
+    tolerations:
+      - key: kubernetes.io/arch
+        operator: Equal
+        value: arm64
+        effect: NoSchedule
+    affinity: {}
+    podAnnotations: {}
+
+# Per-architecture HorizontalPodAutoscaler. CPU utilisation is the primary
+# signal. It only means something when requests == limits and nothing rewrites
+# the requests after the fact (exclude the fleet from VPA/right-sizing tools).
+autoscaling:
+  enabled: true
+  cpuUtilization: 85
+  behavior:
+    scaleUp:
+      # The window keeps the LOWEST recommendation seen inside it, so the metric
+      # must stay over target for the whole window. 30s is the practical floor.
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 900
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 600
+  # Optional second signal: builds accepted per shard (running plus queued on the
+  # admission cap), exported by the load-probe sidecar as `builds_inflight`. It
+  # covers what CPU cannot see: a shard blocked on a registry or a cache export
+  # reads ~0% CPU while still holding every build it accepted.
+  #
+  # Caution: while an external metric is unavailable Kubernetes still scales UP
+  # on the metrics it has but refuses to scale DOWN at all. Wire this only once
+  # your metrics pipeline exposes it reliably.
+  externalMetric:
+    enabled: false
+    # Metric name as exposed by your external metrics adapter. `{{ .arch }}` and
+    # `{{ .name }}` (the "<prefix>-<arch>" resource name) are substituted.
+    name: "datadogmetric@{{ .Release.Namespace }}:{{ .name }}-inflight"
+    # Target builds per shard. With the default cap (80% of 28 cores = 22) this
+    # is "add a shard once every shard is at its cap".
+    targetPerShard: "22"
+    # Convenience for Datadog users: also render a DatadogMetric CR per arch.
+    # Requires the cluster agent's metrics provider with DatadogMetric support.
+    datadog:
+      enabled: false
+      query: "sum:buildkit.builds_inflight{kube_namespace:{{ .Release.Namespace }},arch:{{ .arch }}}"
+
+# Metrics exposure. buildkitd serves Prometheus metrics on :6060/metrics; the
+# load-probe sidecar serves builds_inflight / builds_cap / builds_utilization on
+# :8080/metrics.
+metrics:
+  # Standard prometheus.io/* pod annotations for annotation-based discovery.
+  prometheusAnnotations: true
+  # Added to every shard pod (for example Datadog autodiscovery annotations; see
+  # examples/values-datadog.yaml).
+  extraPodAnnotations: {}
+
+# Load-probe sidecar. GET :8080/load returns {"inflight","cap","full"}; the
+# setup-buildkit action reads it to route around a shard at its cap.
+loadProbe:
+  enabled: true
+  resources:
+    requests: { cpu: 50m, memory: 32Mi }
+    limits: { cpu: 50m, memory: 32Mi }
+
+# Probes. Readiness is a real gRPC round-trip and polls fast: buildkitd listens
+# about 2s after start. Liveness is a plain TCP check on purpose: a saturated
+# daemon can miss an exec deadline three times, and a liveness kill takes every
+# in-flight build with it.
+probes:
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 15
+    failureThreshold: 3
+  liveness:
+    initialDelaySeconds: 5
+    periodSeconds: 30
+    timeoutSeconds: 5
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+# mTLS. cert-manager issues a private CA, one server certificate per
+# architecture (wildcard SAN covers every shard ordinal, so scaling needs no
+# re-issue), and a client certificate into each namespace your CI runners live in.
+trust:
+  enabled: true
+  # Create a self-signed CA and a CA ClusterIssuer. Set false to bring your own
+  # issuer via issuerRef.
+  createCA: true
+  # cert-manager reads a CA ClusterIssuer's signing Secret from its
+  # cluster-resource-namespace (default "cert-manager"). The CA Certificate must
+  # be issued there.
+  caNamespace: cert-manager
+  caDuration: 175200h # 20y
+  leafDuration: 87600h # 10y
+  leafRenewBefore: 2160h # 90d
+  issuerRef:
+    name: "" # defaults to "<namePrefix>-ca-issuer" when createCA is true
+    kind: ClusterIssuer
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  clientCertificate:
+    # Namespaces that receive a client certificate Secret. Runner pods mount it
+    # and the setup-buildkit action presents it. A Secret only mounts within its
+    # own namespace, so list every namespace that runs builds.
+    namespaces:
+      - actions-runner
+    secretName: buildkit-client-tls
+
+# Ingress NetworkPolicy: :1234 (gRPC) from the runner namespaces only; metrics
+# ports open so node-local agents can scrape. Effective only on a CNI that
+# enforces NetworkPolicy; otherwise mTLS is the boundary.
+networkPolicy:
+  enabled: true
+  allowedNamespaces:
+    - actions-runner
+
+# Annotations on the StatefulSets and Namespace. Use these to opt out of
+# request right-sizing automation, which otherwise rewrites the shards'
+# requests, breaks Guaranteed QoS and makes HPA utilisation meaningless.
+commonAnnotations: {}

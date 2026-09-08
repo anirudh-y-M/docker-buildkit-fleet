@@ -1,0 +1,36 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- /*
+Effective only on a CNI that enforces NetworkPolicy. Without one, mTLS is the
+boundary; keep this anyway so the intent applies if the dataplane changes.
+Metrics ports stay open because node-local agents scrape from the node address,
+which no namespaceSelector can match.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "buildkit-fleet.prefix" . }}-allow-runners
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "buildkit-fleet.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ include "buildkit-fleet.prefix" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range .Values.networkPolicy.allowedNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 1234
+    - ports:
+        - protocol: TCP
+          port: 6060
+        - protocol: TCP
+          port: 8080
+{{- end }}

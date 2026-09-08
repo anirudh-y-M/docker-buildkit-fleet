@@ -1,0 +1,29 @@
+# Datadog: autodiscovery annotations for both metrics endpoints, plus the
+# in-flight-builds external metric for the HPA.
+#
+# Prerequisites in your Datadog Helm values:
+#   clusterAgent.metricsProvider.enabled: true
+#   clusterAgent.metricsProvider.useDatadogMetrics: true
+# and node-agent tolerations for any taint on the shard nodes, or nothing scrapes
+# them and the metric never becomes valid.
+metrics:
+  prometheusAnnotations: false
+  extraPodAnnotations:
+    ad.datadoghq.com/buildkit.check_names: '["openmetrics"]'
+    ad.datadoghq.com/buildkit.init_configs: '[{}]'
+    # Keep this an allowlist: /metrics is the Go default registry and "*" would
+    # bill every runtime series as a custom metric.
+    ad.datadoghq.com/buildkit.instances: '[{"openmetrics_endpoint":"http://%%host%%:6060/metrics","namespace":"buildkit","metrics":["rpc_*","go_*","process_*"],"tags":["arch:{{ .arch }}"]}]'
+    ad.datadoghq.com/load.check_names: '["openmetrics"]'
+    ad.datadoghq.com/load.init_configs: '[{}]'
+    ad.datadoghq.com/load.instances: '[{"openmetrics_endpoint":"http://%%host%%:8080/metrics","namespace":"buildkit","metrics":["builds_*"],"tags":["arch:{{ .arch }}"]}]'
+autoscaling:
+  externalMetric:
+    enabled: true
+    name: "datadogmetric@{{ .Release.Namespace }}:{{ .name }}-inflight"
+    targetPerShard: "22"
+    datadog:
+      enabled: true
+      # No .rollup(): Datadog stamps a bucket at its start, so the newest point can
+      # read a whole bucket old and the provider rejects it as outdated.
+      query: "sum:buildkit.builds_inflight{kube_namespace:{{ .Release.Namespace }},arch:{{ .arch }}}"

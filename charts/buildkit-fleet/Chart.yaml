@@ -1,0 +1,23 @@
+apiVersion: v2
+name: buildkit-fleet
+description: >-
+  A horizontally scalable fleet of warm BuildKit shards for CI. One StatefulSet
+  per CPU architecture, one cache disk per shard, mTLS, an admission cap per
+  shard, and a per-architecture autoscaler. Pairs with the setup-buildkit
+  GitHub Action for repository-sticky routing.
+type: application
+version: 0.1.0
+appVersion: "v0.27.0"
+kubeVersion: ">=1.27.0-0"
+keywords:
+  - buildkit
+  - buildx
+  - docker
+  - ci
+  - build-cache
+  - multi-arch
+  - github-actions
+maintainers:
+  - name: Anirudh Yadav
+annotations:
+  artifacthub.io/license: Apache-2.0

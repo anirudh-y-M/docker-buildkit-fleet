@@ -1,0 +1,27 @@
+buildkit-fleet {{ .Chart.Version }} installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Shards (one StatefulSet per architecture):
+{{- range $arch, $cfg := .Values.architectures }}
+{{- if $cfg.enabled }}
+  {{ include "buildkit-fleet.archName" (dict "root" $ "arch" $arch) }}  {{ $cfg.platform }}  {{ $cfg.resources.limits.cpu }} CPU / {{ $cfg.resources.limits.memory }}  {{ $cfg.storage.size }} cache  {{ if $.Values.autoscaling.enabled }}{{ $cfg.autoscaling.minReplicas }}-{{ $cfg.autoscaling.maxReplicas }} shards{{ else }}{{ $cfg.autoscaling.minReplicas }} shards{{ end }}
+{{- end }}
+{{- end }}
+
+Check readiness:
+  kubectl -n {{ .Release.Namespace }} get statefulset,pod,pvc,hpa -l app.kubernetes.io/instance={{ .Release.Name }}
+
+Verify a shard from inside the cluster (client certificate from any namespace in trust.clientCertificate.namespaces):
+  kubectl -n {{ .Release.Namespace }} exec {{ include "buildkit-fleet.prefix" . }}-amd64-0 -c buildkit -- buildctl debug workers
+
+Consume from GitHub Actions with the setup-buildkit action in this repository:
+  - uses: <owner>/image-buildkit-fleet/actions/setup-buildkit@v0.1.0
+    with:
+      platforms: linux/amd64,linux/arm64
+      shard-domain-suffix: {{ .Release.Namespace }}.svc.cluster.local
+      service-prefix: {{ include "buildkit-fleet.prefix" . }}
+
+Runner pods must mount the client Secret "{{ .Values.trust.clientCertificate.secretName }}" at /certs (see examples/runner-mount.yaml).
+{{- if .Values.autoscaling.externalMetric.enabled }}
+
+External metric enabled. Remember: while the metric is unavailable the HPA still scales up on CPU but will not scale down.
+{{- end }}
