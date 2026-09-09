@@ -5,6 +5,7 @@
 # repositoryID is assigned when the repository is added on artifacthub.io
 # (Control panel -> Repositories -> Add -> Helm charts -> the oci:// URL). Paste
 # it here; until it is set, the workflow skips this step.
-repositoryID: ""
+repositoryID: ba3a2ab2-2caa-47de-b93c-4bfd925d6c29
 owners:
   - name: Anirudh Yadav
+    email: yadavanirudh2002@gmail.com
