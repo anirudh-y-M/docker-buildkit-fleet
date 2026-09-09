@@ -1,0 +1,10 @@
+# Artifact Hub repository metadata. Pushed by the release workflow to
+# oci://ghcr.io/anirudh-y-m/charts/buildkit-fleet:artifacthub.io so Artifact Hub
+# can verify ownership and show the publisher as verified.
+#
+# repositoryID is assigned when the repository is added on artifacthub.io
+# (Control panel -> Repositories -> Add -> Helm charts -> the oci:// URL). Paste
+# it here; until it is set, the workflow skips this step.
+repositoryID: ""
+owners:
+  - name: Anirudh Yadav

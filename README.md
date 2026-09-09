@@ -38,10 +38,12 @@ a single point of failure or a scaling ceiling:
 online expansion):
 
 ```bash
-helm install buildkit ./charts/buildkit-fleet \
+helm install buildkit oci://ghcr.io/anirudh-y-m/charts/buildkit-fleet --version 0.1.0 \
   --namespace buildkit --create-namespace \
-  -f charts/buildkit-fleet/examples/values-small.yaml
+  --set trust.clientCertificate.namespaces='{actions-runner}'
 ```
+
+Or from a checkout: `helm install buildkit ./charts/buildkit-fleet -f charts/buildkit-fleet/examples/values-small.yaml`.
 
 **2. Mount the client certificate into your runner pods** at `/certs` — see
 [examples/runner-mount.yaml](examples/runner-mount.yaml). The chart issues the
@@ -51,11 +53,11 @@ Secret into every namespace listed in `trust.clientCertificate.namespaces`.
 
 ```yaml
 - id: dockerfile
-  uses: <owner>/image-buildkit-fleet/actions/strip-cache-mounts@v0.1.0
+  uses: anirudh-y-M/image-buildkit-fleet/actions/strip-cache-mounts@v0.1.0
   with:
     dockerfile: Dockerfile
 
-- uses: <owner>/image-buildkit-fleet/actions/setup-buildkit@v0.1.0
+- uses: anirudh-y-M/image-buildkit-fleet/actions/setup-buildkit@v0.1.0
   with:
     platforms: linux/amd64,linux/arm64
 

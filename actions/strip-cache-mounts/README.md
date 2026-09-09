@@ -12,7 +12,7 @@ copy with every cache mount removed, on other builds it returns the original.
 
 ```yaml
 - id: dockerfile
-  uses: <owner>/image-buildkit-fleet/actions/strip-cache-mounts@v0.1.0
+  uses: anirudh-y-M/image-buildkit-fleet/actions/strip-cache-mounts@v0.1.0
   with:
     dockerfile: Dockerfile
 - uses: docker/build-push-action@v6
