@@ -4,7 +4,7 @@ description: >-
   A horizontally scalable fleet of warm BuildKit shards for CI. One StatefulSet
   per CPU architecture, one cache disk per shard, mTLS, an admission cap per
   shard, and a per-architecture autoscaler. Pairs with the setup-buildkit
-  GitHub Action for repository-sticky routing.
+  GitHub Action for repository-sticky routing with spillover mechanism.
 type: application
 version: 0.1.1
 appVersion: "v0.27.0"
