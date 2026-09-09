@@ -14,7 +14,7 @@ Verify a shard from inside the cluster (client certificate from any namespace in
   kubectl -n {{ .Release.Namespace }} exec {{ include "buildkit-fleet.prefix" . }}-amd64-0 -c buildkit -- buildctl debug workers
 
 Consume from GitHub Actions with the setup-buildkit action in this repository:
-  - uses: anirudh-y-M/image-buildkit-fleet/actions/setup-buildkit@v0.1.0
+  - uses: anirudh-y-M/docker-buildkit-fleet/actions/setup-buildkit@v0.1.0
     with:
       platforms: linux/amd64,linux/arm64
       shard-domain-suffix: {{ .Release.Namespace }}.svc.cluster.local

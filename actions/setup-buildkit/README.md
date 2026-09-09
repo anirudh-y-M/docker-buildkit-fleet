@@ -6,7 +6,7 @@ Point `docker buildx` at a shared, in-cluster BuildKit fleet deployed with the
 `docker buildx build --push` step uses the fleet without changes.
 
 ```yaml
-- uses: anirudh-y-M/image-buildkit-fleet/actions/setup-buildkit@v0.1.0
+- uses: anirudh-y-M/docker-buildkit-fleet/actions/setup-buildkit@v0.1.0
   with:
     platforms: linux/amd64,linux/arm64
 - uses: docker/build-push-action@v6

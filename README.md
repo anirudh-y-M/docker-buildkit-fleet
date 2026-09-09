@@ -1,4 +1,4 @@
-# image-buildkit-fleet
+# docker-buildkit-fleet
 
 **A shared, horizontally scalable BuildKit fleet for CI — and the GitHub Actions that route builds to it for self-hosted runners.**
 
@@ -53,11 +53,11 @@ Secret into every namespace listed in `trust.clientCertificate.namespaces`.
 
 ```yaml
 - id: dockerfile
-  uses: anirudh-y-M/image-buildkit-fleet/actions/strip-cache-mounts@v0.1.0
+  uses: anirudh-y-M/docker-buildkit-fleet/actions/strip-cache-mounts@v0.1.0
   with:
     dockerfile: Dockerfile
 
-- uses: anirudh-y-M/image-buildkit-fleet/actions/setup-buildkit@v0.1.0
+- uses: anirudh-y-M/docker-buildkit-fleet/actions/setup-buildkit@v0.1.0
   with:
     platforms: linux/amd64,linux/arm64
 

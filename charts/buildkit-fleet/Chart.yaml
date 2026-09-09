@@ -17,9 +17,9 @@ keywords:
   - build-cache
   - multi-arch
   - github-actions
-home: https://github.com/anirudh-y-M/image-buildkit-fleet
+home: https://github.com/anirudh-y-M/docker-buildkit-fleet
 sources:
-  - https://github.com/anirudh-y-M/image-buildkit-fleet
+  - https://github.com/anirudh-y-M/docker-buildkit-fleet
 maintainers:
   - name: Anirudh Yadav
     url: https://github.com/anirudh-y-M
@@ -28,11 +28,11 @@ annotations:
   artifacthub.io/category: integration-delivery
   artifacthub.io/links: |
     - name: Architecture
-      url: https://github.com/anirudh-y-M/image-buildkit-fleet/blob/main/docs/architecture.md
+      url: https://github.com/anirudh-y-M/docker-buildkit-fleet/blob/main/docs/architecture.md
     - name: Operations
-      url: https://github.com/anirudh-y-M/image-buildkit-fleet/blob/main/docs/operations.md
+      url: https://github.com/anirudh-y-M/docker-buildkit-fleet/blob/main/docs/operations.md
     - name: setup-buildkit action
-      url: https://github.com/anirudh-y-M/image-buildkit-fleet/tree/main/actions/setup-buildkit
+      url: https://github.com/anirudh-y-M/docker-buildkit-fleet/tree/main/actions/setup-buildkit
   artifacthub.io/changes: |
     - kind: added
       description: Initial release

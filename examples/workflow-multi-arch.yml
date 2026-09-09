@@ -28,12 +28,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: dockerfile
-        uses: anirudh-y-M/image-buildkit-fleet/actions/strip-cache-mounts@v0.1.0
+        uses: anirudh-y-M/docker-buildkit-fleet/actions/strip-cache-mounts@v0.1.0
         with:
           dockerfile: Dockerfile
 
       - id: buildkit
-        uses: anirudh-y-M/image-buildkit-fleet/actions/setup-buildkit@v0.1.0
+        uses: anirudh-y-M/docker-buildkit-fleet/actions/setup-buildkit@v0.1.0
         with:
           platforms: linux/amd64,linux/arm64
 
