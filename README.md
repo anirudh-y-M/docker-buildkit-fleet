@@ -1,13 +1,10 @@
 # image-buildkit-fleet
 
-**A shared, horizontally scalable BuildKit fleet for CI — and the GitHub Actions
-that route builds to it.**
+**A shared, horizontally scalable BuildKit fleet for CI — and the GitHub Actions that route builds to it for self-hosted runners.**
 
-Ephemeral CI runners throw their build cache away after every job. Registry
-caches help, but a stateless worker still has to pull and unpack every cached
-layer before it can build on top of it — for a multi-gigabyte dependency layer
-that is minutes of network transfer for a step buildx reports as `CACHED`. A
-warm BuildKit worker with the bytes already on local disk skips it entirely.
+Ephemeral CI runners throw their build cache away after every job. The solution can be used for non-hosted runners too but the trust boundary i.e. netpol, certs usage will change as per the CI. **The Buildkit Fleet itself is CI agnostic**. 
+
+Registry caches help, but a stateless worker still has to pull and unpack every cachedlayer before it can build on top of it — for a multi-gigabyte dependency layerthat is minutes of network transfer for a step buildx reports as `CACHED`. A warm BuildKit worker with the bytes already on local disk skips it entirely.
 
 This repository packages a design that keeps that warm worker without making it
 a single point of failure or a scaling ceiling:
