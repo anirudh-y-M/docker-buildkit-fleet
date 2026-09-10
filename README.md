@@ -118,6 +118,21 @@ Every number in `values.yaml` has a comment saying why. The short version:
   probe under load false-positives, and a liveness kill takes every in-flight
   build with it.
 
+## Image vulnerabilities
+
+The chart ships the upstream `moby/buildkit` rootless image, pinned by digest,
+and Artifact Hub scans that image with Trivy. The count you see there is
+upstream's: BuildKit is a Go binary on Alpine, and every CVE published against
+its dependencies or the Go standard library after a release counts against it
+until the next release. The chart contains no code of its own that the scan can
+flag, so a non-zero number is not a chart defect — it tracks how recently
+upstream cut a build. Each chart release moves to the newest upstream tag.
+
+If your policy needs a lower number than upstream provides, point `image.*` at
+your own rebuild — BuildKit's Dockerfile takes a `GO_VERSION` build argument, so
+a rebuild on a patched toolchain clears the standard-library findings — or at a
+hardened distribution you have access to. Nothing else in the chart changes.
+
 ## Status
 
 Treat `0.x` as "works, opinionated, expect the knobs to move". Issues and
