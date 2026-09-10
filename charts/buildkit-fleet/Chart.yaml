@@ -6,8 +6,8 @@ description: >-
   shard, and a per-architecture autoscaler. Pairs with the setup-buildkit
   GitHub Action for repository-sticky routing with spillover mechanism.
 type: application
-version: 0.1.1
-appVersion: "v0.27.0"
+version: 0.1.2
+appVersion: "v0.33.0"
 kubeVersion: ">=1.27.0-0"
 keywords:
   - buildkit
@@ -34,5 +34,5 @@ annotations:
     - name: setup-buildkit action
       url: https://github.com/anirudh-y-M/docker-buildkit-fleet/tree/main/actions/setup-buildkit
   artifacthub.io/changes: |
-    - kind: added
-      description: Initial release
+    - kind: security
+      description: Bump BuildKit to v0.33.0 and pin its digest, clearing 423 of 616 image CVEs reported on v0.27.0 (all 14 remaining criticals but one)

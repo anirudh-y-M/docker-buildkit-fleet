@@ -19,8 +19,10 @@ image:
   # Rootless BuildKit. Pin a digest in production; pull through a registry mirror
   # if your CI volume is high enough to meet Docker Hub rate limits.
   repository: docker.io/moby/buildkit
-  tag: v0.27.0-rootless
-  digest: ""
+  tag: v0.33.0-rootless
+  # Digest of docker.io/moby/buildkit:v0.33.0-rootless at release time; clear it to
+  # follow the tag.
+  digest: "sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef"
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 

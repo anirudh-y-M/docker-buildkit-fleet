@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] — 2026-09-10
+
+### Security
+
+- Bump the BuildKit image from v0.27.0 to v0.33.0 and pin it by digest. The
+  v0.27.0 image carried 616 known vulnerabilities (15 critical); v0.33.0 carries
+  193 (1 critical), all in upstream Go dependencies and Alpine packages awaiting
+  a new upstream build. No chart behaviour changes; buildkitd flags and the
+  rootless entrypoint are unchanged across the range.
+
+## [0.1.1] — 2026-09-09
+
+### Changed
+
+- Artifact Hub repository metadata.
+
 ## [0.1.0] — 2026-09-08
 
 Initial public release.
