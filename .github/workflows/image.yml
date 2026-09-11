@@ -83,7 +83,7 @@ jobs:
           '
 
       - name: Vulnerability gate
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: buildkit-candidate:amd64
           scanners: vuln
@@ -94,7 +94,7 @@ jobs:
 
       - name: Scan summary
         if: always()
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: buildkit-candidate:amd64
           scanners: vuln
