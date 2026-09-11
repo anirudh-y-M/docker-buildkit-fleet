@@ -6,7 +6,7 @@ description: >-
   shard, and a per-architecture autoscaler. Pairs with the setup-buildkit
   GitHub Action for repository-sticky routing with spillover mechanism.
 type: application
-version: 0.1.2
+version: 0.2.0
 appVersion: "v0.33.0"
 kubeVersion: ">=1.27.0-0"
 keywords:
@@ -34,5 +34,9 @@ annotations:
     - name: setup-buildkit action
       url: https://github.com/anirudh-y-M/docker-buildkit-fleet/tree/main/actions/setup-buildkit
   artifacthub.io/changes: |
+    - kind: changed
+      description: The default image is now a rebuild of upstream BuildKit v0.33.0 (ghcr.io/anirudh-y-m/docker-buildkit-fleet/buildkit), compiled on a current Go with patched dependencies, scan-gated, signed and published weekly; pinned by digest
     - kind: security
-      description: Bump BuildKit to v0.33.0 and pin its digest, clearing 423 of 616 image CVEs reported on v0.27.0 (all 14 remaining criticals but one)
+      description: The rebuilt image reports zero fixable critical or high vulnerabilities, down from 193 findings on the upstream v0.33.0-rootless image
+    - kind: added
+      description: loadProbe.image to run the load-probe sidecar from a different image than buildkitd
