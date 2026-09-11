@@ -55,3 +55,13 @@ Render a values string through tpl with per-architecture context:
 {{- $ctx := dict "Values" .root.Values "Release" .root.Release "Chart" .root.Chart "Template" .root.Template "Capabilities" .root.Capabilities "arch" .arch "name" .name -}}
 {{- tpl .tmpl $ctx -}}
 {{- end }}
+
+{{/* Load-probe sidecar image: loadProbe.image when a repository is set, else the buildkit image. */}}
+{{- define "buildkit-fleet.loadProbeImage" -}}
+{{- $i := .Values.loadProbe.image | default dict -}}
+{{- if $i.repository -}}
+{{- printf "%s:%s" $i.repository ($i.tag | default .Values.image.tag) -}}{{- with $i.digest }}@{{ . }}{{- end -}}
+{{- else -}}
+{{- include "buildkit-fleet.image" . -}}
+{{- end -}}
+{{- end }}

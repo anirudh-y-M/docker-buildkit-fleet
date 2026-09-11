@@ -139,7 +139,7 @@ spec:
         # -> Prometheus text. Same image as buildkitd (busybox nc/awk), so nothing
         # extra to mirror or pin.
         - name: load
-          image: {{ include "buildkit-fleet.image" $root }}
+          image: {{ include "buildkit-fleet.loadProbeImage" $root }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           command: ["/probe/serve"]
           env:

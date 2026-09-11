@@ -48,6 +48,8 @@ Start from one of the [examples](examples/):
 | `autoscaling.cpuUtilization` | 85 | Primary signal. One saturated shard next to one idle shard reads 50%, so the client-side spill in `setup-buildkit` is what spreads load before the HPA can see it. |
 | `autoscaling.externalMetric` | off | Adds "builds accepted per shard". Useful, but an unavailable external metric freezes scale-down. |
 | `terminationGracePeriodSeconds` | 600 | buildkitd drains in-flight builds on SIGTERM. |
+| `image.*` | the rebuilt image, digest-pinned | Upstream `moby/buildkit` rebuilt on a current Go with patched dependencies, scanned and signed weekly ([image/README.md](../../image/README.md)). Set `repository`/`tag`/`digest` to run upstream or your own. |
+| `loadProbe.image` | same as `image` | The sidecar needs only busybox `sh`, `nc -e`, `awk`; point it at a smaller image if you like. |
 
 ## What gets created
 

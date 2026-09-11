@@ -120,18 +120,32 @@ Every number in `values.yaml` has a comment saying why. The short version:
 
 ## Image vulnerabilities
 
-The chart ships the upstream `moby/buildkit` rootless image, pinned by digest,
-and Artifact Hub scans that image with Trivy. The count you see there is
-upstream's: BuildKit is a Go binary on Alpine, and every CVE published against
-its dependencies or the Go standard library after a release counts against it
-until the next release. The chart contains no code of its own that the scan can
-flag, so a non-zero number is not a chart defect — it tracks how recently
-upstream cut a build. Each chart release moves to the newest upstream tag.
+Artifact Hub scans the image the chart ships with Trivy, and BuildKit is a Go
+binary on Alpine, so every CVE published against its dependencies or the Go
+standard library after a release counts against it until the next one. None of
+that is chart code, and pointing at a newer upstream tag only helps until the
+next batch of CVEs lands.
 
-If your policy needs a lower number than upstream provides, point `image.*` at
-your own rebuild — BuildKit's Dockerfile takes a `GO_VERSION` build argument, so
-a rebuild on a patched toolchain clears the standard-library findings — or at a
-hardened distribution you have access to. Nothing else in the chart changes.
+So the chart ships a **rebuild of upstream** instead:
+`ghcr.io/anirudh-y-m/docker-buildkit-fleet/buildkit`. It is `moby/buildkit` at the
+same tag, compiled on a current Go toolchain with the flagged dependencies
+raised, gated on a scan, signed with Sigstore, published multi-arch with
+provenance and an SBOM, and rebuilt weekly. The chart pins it by digest. What is
+in it, what differs from upstream, and how to verify the signature are in
+[image/README.md](image/README.md).
+
+You choose the image; it is just values:
+
+```yaml
+image:
+  repository: docker.io/moby/buildkit      # upstream, as published
+  tag: v0.33.0-rootless
+  digest: ""
+```
+
+Anything with the upstream rootless layout works, including your own rebuild
+(`image/build.sh` produces one). The load-probe sidecar can run a separate,
+smaller image via `loadProbe.image`.
 
 ## Status
 

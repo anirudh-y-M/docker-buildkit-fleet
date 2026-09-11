@@ -1,0 +1,183 @@
+name: Image
+
+# Rebuilds the BuildKit image from upstream sources on a current Go toolchain
+# with patched dependencies (image/Dockerfile), gates it on a vulnerability
+# scan, publishes it multi-arch with provenance, SBOM and a keyless signature,
+# and opens a pull request pinning the chart to the new digest.
+#
+# Runs weekly so a Go or dependency security release reaches the image without
+# anyone remembering to rebuild.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - image/**
+      - .github/workflows/image.yml
+  schedule:
+    - cron: "23 4 * * 1" # Mondays 04:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write # cosign keyless signing
+  pull-requests: write
+
+concurrency:
+  group: image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load pins
+        id: pins
+        run: |
+          set -euo pipefail
+          # Every line of versions.env becomes a --build-arg.
+          grep -E '^[A-Z_]+=' image/versions.env > /tmp/args.env
+          {
+            echo "build_args<<EOF"; cat /tmp/args.env; echo "EOF"
+            echo "buildkit_version=$(sed -n 's/^BUILDKIT_VERSION=//p' /tmp/args.env)"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY,,}/buildkit"
+            echo "date=$(date -u +%Y%m%d)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Native-arch build first: smoke-test it and scan it before anything is
+      # pushed. The multi-arch push below reuses these layers from cache.
+      - name: Build (linux/amd64, local)
+        uses: docker/build-push-action@v6
+        with:
+          context: image
+          platforms: linux/amd64
+          load: true
+          tags: buildkit-candidate:amd64
+          build-args: ${{ steps.pins.outputs.build_args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh buildkit-candidate:amd64 -c '
+            set -e
+            buildkitd --version
+            buildctl --version
+            rootlesskit --version
+            [ "$(id -u)" = 1000 ]
+            nc --help 2>&1 | grep -q -- "-e"           # the chart load probe needs busybox nc -e
+            for b in buildkit-runc buildkit-cni-bridge buildkit-cni-loopback buildkit-cni-host-local buildkit-cni-firewall buildctl-daemonless.sh; do
+              command -v "$b" >/dev/null
+            done
+          '
+
+      - name: Vulnerability gate
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: buildkit-candidate:amd64
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: Scan summary
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: buildkit-candidate:amd64
+          scanners: vuln
+          format: json
+          output: trivy.json
+          exit-code: "0"
+      - if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, collections
+          r = json.load(open("trivy.json"))
+          c = collections.Counter(v["Severity"] for res in r.get("Results", []) for v in (res.get("Vulnerabilities") or []))
+          print("### Trivy — buildkit candidate (linux/amd64)\n")
+          print("| critical | high | medium | low | total |\n|---|---|---|---|---|")
+          print(f"| {c['CRITICAL']} | {c['HIGH']} | {c['MEDIUM']} | {c['LOW']} | {sum(c.values())} |")
+          PY
+
+      - name: Build and push (linux/amd64, linux/arm64)
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: image
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          build-args: ${{ steps.pins.outputs.build_args }}
+          cache-from: type=gha
+          tags: |
+            ${{ steps.pins.outputs.image }}:${{ steps.pins.outputs.buildkit_version }}-rootless
+            ${{ steps.pins.outputs.image }}:${{ steps.pins.outputs.buildkit_version }}-rootless-${{ steps.pins.outputs.date }}
+            ${{ steps.pins.outputs.image }}:latest-rootless
+
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign (keyless, Sigstore)
+        env:
+          REF: ${{ steps.pins.outputs.image }}@${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "$REF"
+
+      - name: Pin the chart to the new digest
+        env:
+          IMAGE: ${{ steps.pins.outputs.image }}
+          TAG: ${{ steps.pins.outputs.buildkit_version }}-rootless
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          f=charts/buildkit-fleet/values.yaml
+          python3 - "$f" <<'PY'
+          import os, re, sys
+          p = sys.argv[1]; s = open(p).read()
+          img, tag, dig = os.environ["IMAGE"], os.environ["TAG"], os.environ["DIGEST"]
+          # Only the top-level image: block (loadProbe.image is left to the user).
+          s = re.sub(r"(?m)^(image:\n(?:  .*\n)*?  repository: ).*$", lambda m: m.group(1) + img, s, count=1)
+          s = re.sub(r"(?m)^(image:\n(?:  .*\n)*?  tag: ).*$",        lambda m: m.group(1) + tag, s, count=1)
+          s = re.sub(r"(?m)^(image:\n(?:  .*\n)*?  digest: ).*$",     lambda m: m.group(1) + f'"{dig}"', s, count=1)
+          open(p, "w").write(s)
+          PY
+          git diff --stat
+
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: image/pin-digest
+          delete-branch: true
+          commit-message: |
+            chart: pin the rebuilt BuildKit image ${{ steps.pins.outputs.buildkit_version }}
+
+            ${{ steps.pins.outputs.image }}@${{ steps.push.outputs.digest }}
+            built ${{ steps.pins.outputs.date }} on Go from image/versions.env.
+          title: "chart: pin rebuilt BuildKit ${{ steps.pins.outputs.buildkit_version }} (${{ steps.pins.outputs.date }})"
+          body: |
+            Automated by the **Image** workflow.
+
+            **What:** points `image.*` at the digest this run built, scanned and signed:
+            `${{ steps.pins.outputs.image }}@${{ steps.push.outputs.digest }}`
+
+            **Why:** the image is rebuilt weekly from `image/versions.env` so Go and dependency
+            security fixes reach it; the chart pins by digest, so each rebuild is a reviewed change.
+            The scan summary is on this run's job page.
+
+            Verify the signature:
+            ```
+            cosign verify ${{ steps.pins.outputs.image }}@${{ steps.push.outputs.digest }} \
+              --certificate-identity-regexp '^https://github.com/${{ github.repository }}/' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            ```
+          labels: image

@@ -16,8 +16,14 @@ namespace:
   annotations: {}
 
 image:
-  # Rootless BuildKit. Pin a digest in production; pull through a registry mirror
-  # if your CI volume is high enough to meet Docker Hub rate limits.
+  # Which BuildKit to run. Three sensible choices, all the same layout and
+  # entrypoint, so switching is a values change:
+  #   - ghcr.io/anirudh-y-m/docker-buildkit-fleet/buildkit  upstream rebuilt on a
+  #     current Go with patched dependencies, scanned and signed weekly (image/)
+  #   - docker.io/moby/buildkit                           the upstream image
+  #   - your own registry                                  your rebuild or mirror
+  # Pin a digest in production. Pull through a registry mirror if your CI volume
+  # is high enough to meet Docker Hub rate limits.
   repository: docker.io/moby/buildkit
   tag: v0.33.0-rootless
   # Digest of docker.io/moby/buildkit:v0.33.0-rootless at release time; clear it to
@@ -188,6 +194,13 @@ metrics:
 # setup-buildkit action reads it to route around a shard at its cap.
 loadProbe:
   enabled: true
+  # The sidecar only needs busybox sh, nc -e and awk. Empty means "same image as
+  # buildkitd", which keeps one thing to mirror and pin; set it to run a smaller
+  # image instead.
+  image:
+    repository: ""
+    tag: ""
+    digest: ""
   resources:
     requests: { cpu: 50m, memory: 32Mi }
     limits: { cpu: 50m, memory: 32Mi }
