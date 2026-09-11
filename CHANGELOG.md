@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- A rebuilt BuildKit image (`image/`): upstream sources at the same tags,
+  compiled on a current Go with patched dependencies, scan-gated, signed and
+  published multi-arch weekly by the **Image** workflow, which then opens a PR
+  pinning the chart to the new digest.
+- `loadProbe.image` to run the load-probe sidecar from a different image than
+  buildkitd.
+
 ## [0.1.2] — 2026-09-10
 
 ### Security

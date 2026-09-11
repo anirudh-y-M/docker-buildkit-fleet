@@ -158,3 +158,18 @@ the Service instead.
 default of 30 s cuts them mid-step.
 
 **Cost:** any rollout while builds are active is slow by design.
+
+## 17. Ship a rebuild of the upstream image, not the upstream image
+
+**Because** the upstream rootless image bundles binaries built elsewhere (CNI
+plugins arrive prebuilt on an older Go) and pins dependency versions that pick
+up CVEs between releases, so a scanner reports findings no chart change can
+clear. Rebuilding every component from the same upstream tags on one current
+toolchain, with those modules raised, is the only lever that moves the count —
+and doing it weekly, gated on the scan and signed, makes it a maintained
+artefact rather than a one-off.
+
+**Cost:** the image is now this project's to maintain: upstream releases need a
+pin bump, a compile break on a raised dependency is ours to fix, and users must
+trust this repository's build rather than Docker Hub's. The upstream image
+remains a one-line `image.repository` override.
