@@ -24,11 +24,11 @@ image:
   #   - your own registry                                  your rebuild or mirror
   # Pin a digest in production. Pull through a registry mirror if your CI volume
   # is high enough to meet Docker Hub rate limits.
-  repository: docker.io/moby/buildkit
+  repository: ghcr.io/anirudh-y-m/docker-buildkit-fleet/buildkit
   tag: v0.33.0-rootless
-  # Digest of docker.io/moby/buildkit:v0.33.0-rootless at release time; clear it to
+  # Digest the chart was released against (see CHANGELOG.md); clear it to
   # follow the tag.
-  digest: "sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef"
+  digest: "sha256:18c56b68b3fd65c6f812ea2bc65a00a2c3a0280edaeb367ac0c5220ef4fb7224"
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
