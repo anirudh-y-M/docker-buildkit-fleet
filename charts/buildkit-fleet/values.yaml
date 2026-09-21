@@ -28,7 +28,7 @@ image:
   tag: v0.33.0-rootless
   # Digest the chart was released against (see CHANGELOG.md); clear it to
   # follow the tag.
-  digest: "sha256:18c56b68b3fd65c6f812ea2bc65a00a2c3a0280edaeb367ac0c5220ef4fb7224"
+  digest: "sha256:a433ca2d4dbd17d6c16646f3a0a57c6c17f3e8fbc87b494699af925b0711a715"
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
